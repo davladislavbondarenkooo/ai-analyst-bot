@@ -1,0 +1,226 @@
+{
+  "name": "run_sql",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "6d4fa210-ff36-4afc-b77b-bcbc37d83735",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_LIMIT = 100;\nconst PREFIX = 'bigquery-public-data.thelook_ecommerce.';\nconst TABLES = ['orders', 'order_items', 'products', 'users', 'events', 'inventory_items', 'distribution_centers'];\nconst PII_COLUMNS = /\\b(first_name|last_name|email|street_address|postal_code|ip_address)\\b/;\nconst PII_TABLES = ['users', 'events']; // таблиці, де є персональні дані\nconst NOT_ALIAS = new Set(['where', 'join', 'left', 'right', 'inner', 'full', 'cross', 'on', 'using', 'group', 'order',\n  'limit', 'union', 'window', 'qualify', 'having', 'except', 'intersect', 'tablesample', 'for', 'pivot', 'unpivot']);\nconst esc = s => s.replace(/[.*+?^${}()|[\\]\\\\-]/g, '\\\\$&');\n\nlet sql = String($input.first().json.query || '').trim().replace(/;+\\s*$/, '');\nconst fail = (error) => [{ json: { ok: false, error, sql } }];\nif (!sql) return fail('Порожній запит.');\n\n// 1) Копія для перевірок: рядкові літерали -> '', коментарі -> пробіл, `ідентифікатори` лишаються.\nconst clean = sql.replace(\n  /'(?:[^'\\\\]|\\\\.)*'|\"(?:[^\"\\\\]|\\\\.)*\"|`[^`]*`|--[^\\n]*|#[^\\n]*|\\/\\*[\\s\\S]*?\\*\\//g,\n  m => (m[0] === \"'\" ? \"''\" : m[0] === '\"' ? '\"\"' : m[0] === '`' ? m : ' ')\n).trim();\nconst lower = clean.toLowerCase();\n// Та сама довжина, що й lower, але вміст `...` замінено на ~ (щоб позиції збігались)\nconst code = lower.replace(/`[^`]*`/g, m => '`' + '~'.repeat(m.length - 2) + '`');\n\n// 2) Лише один SELECT / WITH\nif (!/^(select|with)\\b/.test(lower)) return fail('Дозволені лише запити SELECT / WITH.');\nif (lower.includes(';')) return fail('Дозволений лише один SQL-вираз.');\nif (/\\b(insert|update|delete|merge|drop|create|alter|truncate|grant|revoke|call|execute|export|load)\\b/.test(code)) {\n  return fail('Запит містить заборонену операцію.');\n}\n\n// 3) Таблиці: лише повна назва в одних зворотних лапках і лише з дозволеного списку\nconst tableMsg = 'Використовуй лише таблиці `' + PREFIX + '<table>` (повна назва в одних зворотних лапках), '\n  + 'де <table>: ' + TABLES.join(', ') + '.';\nconst refs = [...lower.matchAll(/`([^`]*)`/g)].map(m => m[1]).filter(r => r.includes('.'));\nif (!refs.length || refs.some(r => !TABLES.some(t => r === PREFIX + t))) return fail(tableMsg);\nif (/`\\s*\\./.test(code)) return fail(tableMsg);                          // `project`.dataset.table\n// project.dataset.table без лапок (BigQuery дозволяє дефіси в назві проєкту без лапок у FROM)\nif (/(^|[^\\w.`~-])[a-z_][\\w-]*\\.[a-z_]\\w*\\.[a-z_]/.test(code)) return fail(tableMsg);\n\n// 4) Персональні дані: колонки\nif (PII_COLUMNS.test(lower)) {\n  return fail(\"Запит звертається до персональних даних (ім'я, email, адреса, IP). Використовуй агреговані дані.\");\n}\n\n// 5) Персональні дані: увесь рядок users/events як значення (SELECT u, u AS x, TO_JSON_STRING(u), ARRAY_AGG(u ...), [u] ...)\n//    Перевіряємо лише в межах дужок, де оголошено таблицю (CTE-сусіди не рахуються).\nconst pairs = []; { const st = [];\n  for (let i = 0; i < code.length; i++) {\n    if (code[i] === '(') st.push(i);\n    else if (code[i] === ')' && st.length) pairs.push([st.pop(), i]);\n  } }\nconst scopeOf = (pos) => pairs.filter(([a, b]) => a < pos && pos < b)\n  .reduce((best, p) => (!best || p[0] > best[0] ? p : best), null) || [-1, code.length];\n\nconst tableRe = new RegExp('`' + esc(PREFIX) + '(' + PII_TABLES.join('|') + ')`(?:\\\\s+(?:as\\\\s+)?([a-z_]\\\\w*))?', 'g');\nfor (const m of lower.matchAll(tableRe)) {\n  const alias = m[2] && !NOT_ALIAS.has(m[2]) ? m[2] : m[1];\n  const [from, to] = scopeOf(m.index);\n  const use = new RegExp('(?:^|[(,\\\\[]|\\\\b(?:select|distinct|all|struct|value|then|else)\\\\b)\\\\s*' + esc(alias) + '\\\\b(?!\\\\s*\\\\.)', 'g');\n  for (const u of code.matchAll(use)) {\n    if (u.index > from && u.index < to) {\n      return fail(`Не вибирай рядок таблиці ${m[1]} цілком (${alias}) — там персональні дані. Перелічи потрібні колонки `\n        + `(${alias}.<колонка>). Якщо ${alias} — назва твоєї колонки, дай таблиці короткий аліас `\n        + `(наприклад, ${m[1][0]}) або перейменуй колонку (${alias}_cnt).`);\n    }\n  }\n}\n\n// 6) SELECT * / t.* / SELECT AS STRUCT * заборонені; COUNT(*) дозволено\nif (/\\bselect\\s+(?:(?:distinct|all|as\\s+struct|as\\s+value)\\s+)?(?:\\w+\\.)?\\*|,\\s*(?:\\w+\\.)?\\*/.test(lower)) {\n  return fail('SELECT * заборонено. Перелічи потрібні колонки явно.');\n}\n\n// 7) LIMIT: додаємо, якщо немає; занадто великий — просимо агрегувати\nconst lim = lower.match(/\\blimit\\s+(\\d+)(?:\\s+offset\\s+\\d+)?\\s*$/);\nif (!lim) sql += `\\nLIMIT ${MAX_LIMIT}`;\nelse if (Number(lim[1]) > MAX_LIMIT) return fail(`LIMIT не більше ${MAX_LIMIT}. Агрегуй дані в SQL.`);\n\nreturn [{ json: { ok: true, sql } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "84d9d0b7-834a-4bdb-90b7-88cc75f6cd8a",
+      "name": "validate_sql"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 4
+          },
+          "conditions": [
+            {
+              "id": "c5850659-3749-4af5-836f-e7fad6f4f2ba",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        448,
+        0
+      ],
+      "id": "0c7070bb-7865-41a9-acac-9ac4c387429d",
+      "name": "is_valid"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3de4006e-bc70-4484-b581-3ec46a3d15ce",
+              "name": "ok",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "4b33d4d9-8dad-4f6d-9cd3-c34f03438649",
+              "name": "stage",
+              "value": "validation",
+              "type": "string"
+            },
+            {
+              "id": "76f28cc0-68b8-4cde-801e-a12ea83b7fa0",
+              "name": "error",
+              "value": "={{ $json.error }}",
+              "type": "string"
+            },
+            {
+              "id": "6f54d4dc-d401-40d6-a69b-d1d08429d6a4",
+              "name": "hint",
+              "value": "Запит заблоковано валідатором. Виправ SQL згідно з правилами і виклич run_sql ще раз.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        672,
+        96
+      ],
+      "id": "009e1577-8f42-4456-8a86-b4b92041fb3b",
+      "name": "validation_error"
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_ROWS = 50;\nconst items = $input.all().map(i => i.json);\nconst sql = $('validate_sql').first().json.sql;\n\n// 1) Помилка BigQuery (On Error = Continue кладе її в поле error)\nconst first = items[0] || {};\nif (items.length === 1 && 'error' in first && Object.keys(first).length <= 3) {\n  const e = first.error;\n  const message = typeof e === 'string' ? e : (e?.message || JSON.stringify(e));\n  return [{ json: {\n    ok: false,\n    stage: 'bigquery',\n    error: message + (first.description ? ` (${first.description})` : ''),\n    hint: 'BigQuery повернув помилку. Прочитай її, виправ SQL і виклич run_sql ще раз.',\n    sql,\n  }}];\n}\n\n// 2) Дані (Always Output Data дає порожній {} при 0 рядків — відкидаємо його)\nconst rows = items.filter(r => Object.keys(r).length > 0);\n\n// 3) 0 рядків АБО один рядок, де всі значення 0 / null (типово для COUNT/SUM з хибним фільтром)\nconst allZero = rows.length === 1 &&\n  Object.values(rows[0]).every(v => v === null || Number(v) === 0);\n\n\n// Нове: note, коли рядків рівно стільки, скільки дозволяє LIMIT валідатора (100) — результат міг бути обрізаний.\nconst LIMIT_CAP = 100;   // має збігатися з MAX_LIMIT у validate_sql\nconst notes = [];\nif (rows.length === 0 || allZero) {\n  notes.push('Результат порожній або нульовий. Перш ніж робити висновок, перевір значення у WHERE (регістр, точне написання, формат дат).');\n}\nif (rows.length >= LIMIT_CAP) {\n  notes.push(`Рівно ${LIMIT_CAP} рядків — це межа LIMIT, тож результат міг бути обрізаний. Не роби висновків «по всіх» — агрегуй сильніше (наприклад, по місяцях замість днів) і виклич run_sql ще раз.`);\n}\n\nreturn [{ json: {\n  ok: true,\n  sql,\n  row_count: rows.length,\n  truncated: rows.length > MAX_ROWS,\n  rows: rows.slice(0, MAX_ROWS),\n  note: notes.length ? notes.join(' ') : undefined,\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -64
+      ],
+      "id": "90d34d29-d41e-41db-8b70-2e53d2675596",
+      "name": "format_result"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "projectId": {
+          "__rl": true,
+          "value": "YOUR_GCP_PROJECT",
+          "mode": "list",
+          "cachedResultName": "YOUR_GCP_PROJECT",
+          "cachedResultUrl": "https://console.cloud.google.com/bigquery?project=YOUR_GCP_PROJECT"
+        },
+        "sqlQuery": "{{ $json.sql }}",
+        "options": {
+          "location": "US",
+          "maximumBytesBilled": "1000000000",
+          "useLegacySql": false
+        }
+      },
+      "type": "n8n-nodes-base.googleBigQuery",
+      "typeVersion": 2.1,
+      "position": [
+        672,
+        -64
+      ],
+      "id": "24e842a5-51b7-42e9-9719-47d9332a2519",
+      "name": "bigquery_query",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "googleApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL",
+          "name": "BigQuery – n8n-bigquery"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "validate_sql",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate_sql": {
+      "main": [
+        [
+          {
+            "node": "is_valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "is_valid": {
+      "main": [
+        [
+          {
+            "node": "bigquery_query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "validation_error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "bigquery_query": {
+      "main": [
+        [
+          {
+            "node": "format_result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "ERROR_HANDLER_WORKFLOW_ID",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "nodeGroups": [],
+  "tags": [],
+  "pinData": {}
+}
