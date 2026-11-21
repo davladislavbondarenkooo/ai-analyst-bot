@@ -1,9 +1,4 @@
-// validate_sql v2.1 — Code-вузол validate_sql у саб-воркфлоу run_sql (Run Once for All Items).
-// Вхід: { query }. Вихід: { ok:true, sql } або { ok:false, error, sql }.
-// Це запобіжник від помилок агента, а не межа безпеки. Межа безпеки — права service account у GCP
-// (лише BigQuery Job User; публічний датасет читається без додаткових ролей).
-// Тести: 43/43 (25 з зовнішнього рев'ю + 18 власних: еталони, коментарі, обходи).
-
+// n8n: воркфлоу «run_sql», вузол validate_sql (Code, Run Once for All Items)
 const MAX_LIMIT = 100;
 const PREFIX = 'bigquery-public-data.thelook_ecommerce.';
 const TABLES = ['orders', 'order_items', 'products', 'users', 'events', 'inventory_items', 'distribution_centers'];

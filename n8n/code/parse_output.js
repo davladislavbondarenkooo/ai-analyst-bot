@@ -1,3 +1,4 @@
+// n8n: воркфлоу «AI Analyst Bot», вузол parse_output (Code, Run Once for All Items)
 // parse_output v4.4 (21.11): v4.3 + інструменти run_sql* (run_sql1 у recheck). v4.3: text_issue — обірваний текст («...»), «близько/приблизно/≈», «див. нижче».
 const msg = $('Telegram Trigger').first().json.message;
 const cfg = $('config').first().json;

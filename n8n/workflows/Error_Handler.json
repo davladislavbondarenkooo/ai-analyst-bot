@@ -18,15 +18,13 @@
         "operation": "append",
         "documentId": {
           "__rl": true,
-          "value": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit",
-          "mode": "url"
+          "value": "YOUR_SPREADSHEET_ID",
+          "mode": "id"
         },
         "sheetName": {
           "__rl": true,
-          "value": 1483020737,
-          "mode": "list",
-          "cachedResultName": "errors",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+          "value": "errors",
+          "mode": "name"
         },
         "columns": {
           "mappingMode": "defineBelow",
@@ -122,7 +120,7 @@
     },
     {
       "parameters": {
-        "chatId": "YOUR_CHAT_ID",
+        "chatId": "123456789",
         "text": "={{ (() => { const e = $('Error Trigger').first().json; const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); return `⚠️ Збій у <b>${esc(e.workflow?.name)}</b>\\nВузол: <code>${esc(e.execution?.lastNodeExecuted)}</code>\\nПомилка: ${esc(e.execution?.error?.message)}\\nExecution: ${esc(e.execution?.id)}`; })() }}",
         "additionalFields": {
           "appendAttribution": false,
@@ -137,6 +135,7 @@
       ],
       "id": "0c2521cc-dc04-46ca-9528-84ba28c731d9",
       "name": "notify_admin",
+      "webhookId": "7e182c72-7162-4420-9238-fe54a1651366",
       "credentials": {
         "telegramApi": {
           "id": "REPLACE_WITH_YOUR_CREDENTIAL",
@@ -145,6 +144,7 @@
       }
     }
   ],
+  "pinData": {},
   "connections": {
     "Error Trigger": {
       "main": [
@@ -175,6 +175,5 @@
     "binaryMode": "separate"
   },
   "nodeGroups": [],
-  "tags": [],
-  "pinData": {}
+  "tags": []
 }

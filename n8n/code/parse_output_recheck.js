@@ -1,8 +1,4 @@
-// parse_output_recheck v3 (21.11) — вставити цілком у Code-вузол parse_output_recheck (Run Once for All Items).
-// v3: (1) рахує виклики інструмента run_sql1 (у v1–v2 фільтр шукав лише 'run_sql' → друга відповідь завжди відкидалась);
-//     (2) якщо recheck не викликав SQL, а лише прибрав число з тексту — перевіряє текст проти даних першого агента.
-// Друга відповідь береться, лише якщо вона краща за першу (менше неперевірених чисел або виправлений текст) і ніде не гірша.
-
+// n8n: воркфлоу «AI Analyst Bot», вузол parse_output_recheck (Code, Run Once for All Items)
 const first = $('parse_output').first().json;
 
 const res = (() => {

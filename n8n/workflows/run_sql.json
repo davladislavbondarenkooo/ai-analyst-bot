@@ -126,10 +126,8 @@
         "authentication": "serviceAccount",
         "projectId": {
           "__rl": true,
-          "value": "YOUR_GCP_PROJECT",
-          "mode": "list",
-          "cachedResultName": "YOUR_GCP_PROJECT",
-          "cachedResultUrl": "https://console.cloud.google.com/bigquery?project=YOUR_GCP_PROJECT"
+          "value": "YOUR_GCP_PROJECT_ID",
+          "mode": "id"
         },
         "sqlQuery": "{{ $json.sql }}",
         "options": {
@@ -158,6 +156,15 @@
       "onError": "continueRegularOutput"
     }
   ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "query": "SELECT p.category, ROUND(SUM(oi.sale_price), 0) AS revenue FROM `bigquery-public-data.thelook_ecommerce.order_items` oi JOIN `bigquery-public-data.thelook_ecommerce.products` p ON oi.product_id = p.id WHERE oi.status NOT IN ('Cancelled','Returned') GROUP BY p.category ORDER BY revenue DESC LIMIT 5"
+        }
+      }
+    ]
+  },
   "connections": {
     "When Executed by Another Workflow": {
       "main": [
@@ -216,11 +223,9 @@
     "executionOrder": "v1",
     "binaryMode": "separate",
     "timeSavedMode": "fixed",
-    "errorWorkflow": "ERROR_HANDLER_WORKFLOW_ID",
     "callerPolicy": "workflowsFromSameOwner",
     "availableInMCP": false
   },
   "nodeGroups": [],
-  "tags": [],
-  "pinData": {}
+  "tags": []
 }
